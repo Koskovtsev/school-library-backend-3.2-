@@ -1,5 +1,5 @@
-var pathname = $(location).attr('pathname');
-var bookIdPosition = pathname.lastIndexOf('/') + 1;
+var pathname = $(location).attr("pathname");
+var bookIdPosition = pathname.lastIndexOf("/") + 1;
 var isBookInUse = false;
 var bookId;
 
@@ -48,31 +48,52 @@ var bookId;
 //     }
 // });
 /*------------------ Sending email by clicking on the button ----------------*/
-$('.btnBookID').click(function(event) {
-    // var email = $('.orderEmail').val();
-    // var isEmail = controller.validateEmail(email);
-    // if (isEmail) {
-    //     view.showSuccessEmail();
-    //     var id = $('#bookID').attr('book-id');
-    //     sendEmailToQueue(id, email);
-    // } else {
-    //     view.showErrEmail();
-    // }
-    // if (isBookInUse) {
-    //     view.showSubscribe(
-    //         "Сейчас эта книга находится на руках, у одного из наших учеников." +
-    //         " Оставь свой email и мы сообщим, как только книга вновь" +
-    //         " появится в библиотеке", bookId);
-    // } else 
-    {
-        alert(
-            "Книга свободна и ты можешь прийти за ней." +
-            " Наш адрес: г. Кропивницкий, переулок Васильевский 10, 5 этаж." +
-            " Лучше предварительно прозвонить и предупредить нас, чтоб " +
-            " не попасть в неловкую ситуацию. Тел. 099 196 24 69"+
-            " \n\n"+
-            "******************\n"+
-            "Кстати, если вы читаете этот текст, то автор сайта еще не отсылает ajax запрос на увеличение количества кликов на кнопку по этой книге"
-        );
+$(".btnBookID").click(async function (event) {
+  event.preventDefault();
+  // var email = $('.orderEmail').val();
+  // var isEmail = controller.validateEmail(email);
+  // if (isEmail) {
+  //     view.showSuccessEmail();
+  //     var id = $('#bookID').attr('book-id');
+  //     sendEmailToQueue(id, email);
+  // } else {
+  //     view.showErrEmail();
+  // }
+  // if (isBookInUse) {
+  //     view.showSubscribe(
+  //         "Сейчас эта книга находится на руках, у одного из наших учеников." +
+  //         " Оставь свой email и мы сообщим, как только книга вновь" +
+  //         " появится в библиотеке", bookId);
+  // } else
+  {
+    var currentUrl = window.location.href;
+    const bookId = parseInt(currentUrl.split("/").pop()) || 0;
+    const postData = {
+      method: "POST",
+      body: JSON.stringify({ bookId: bookId }),
+      headers: {
+        "Content-Type": "application/json",
+      },
+    };
+    try {
+      const apiResponse = await fetch("http://localhost:5000/book/", postData);
+      if (!apiResponse.ok) {
+        throw new Error(`Помилка запиту: ${apiResponse.status}`);
+      }
+      const statusCode = apiResponse.json();
+      console.log(`response: ${statusCode}`);
+      alert(
+        "Книга свободна и ты можешь прийти за ней." +
+          " Наш адрес: г. Кропивницкий, переулок Васильевский 10, 5 этаж." +
+          " Лучше предварительно прозвонить и предупредить нас, чтоб " +
+          " не попасть в неловкую ситуацию. Тел. 099 196 24 69" +
+          " \n\n" +
+          "******************\n",
+      );
+    } catch (error) {
+      alert(
+        `Виникла помилка на сервері, спробуйте будь-ласка пізніше. \n статус: ${error}`,
+      );
     }
+  }
 });

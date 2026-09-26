@@ -1,5 +1,8 @@
 import express from "express";
-import mysql, { type RowDataPacket } from "mysql2/promise";
+import mysql, {
+  type RowDataPacket,
+  type ResultSetHeader,
+} from "mysql2/promise";
 import dotenv from "dotenv";
 import fs from "fs/promises";
 import path from "path";
@@ -17,7 +20,7 @@ const pool = mysql.createPool({
   connectionLimit: 10,
   queueLimit: 0,
 });
-
+app.use(express.json());
 app.use(express.static("public", { index: false }));
 const BOOKS_TEMPLATE_PATH = path.join(process.cwd(), "views", "index.html");
 const BOOK_PAGE_TEMPLATE_PATH = path.join(
@@ -29,14 +32,36 @@ const BOOK_PAGE_TEMPLATE_PATH = path.join(
 app.get("/", async (req, res) => {
   try {
     const offset = Number(req.query["offset"]) || 0;
-    const limit = Number(req.query["limit"]) || 20;
-    const [rows] = await pool.query<
-      RowDataPacket[]
-    >(`SELECT books.id AS bookId, books.name AS bookName, authors.name AS authorName
+    const limit = Number(req.query["limit"]) || 1;
+    const search = req.query["search"];
+
+    if (
+      !Number.isInteger(offset) ||
+      offset < 0 ||
+      !Number.isInteger(limit) ||
+      limit <= 0
+    ) {
+      return res.status(400).send("Невірний формат query параметрів");
+    }
+    const querySelectors = [];
+    let sqlSelect = `SELECT books.id AS bookId, books.name AS bookName, authors.name AS authorName
           FROM books 
           INNER JOIN book_authors ON books.id=book_authors.book_id
           INNER JOIN authors ON book_authors.author_id=authors.id
-          LIMIT ${limit} OFFSET ${offset};`);
+          `;
+    if (search) {
+      sqlSelect += `WHERE books.name LIKE ? OR authors.name LIKE ? `;
+      querySelectors.push(`%${search}%`);
+      querySelectors.push(`%${search}%`);
+    }
+    querySelectors.push(limit);
+    querySelectors.push(offset);
+    sqlSelect += `LIMIT ? OFFSET ?`;
+    const formattedQuery = mysql.format(sqlSelect, querySelectors);
+    console.log("Реальний SQL-запит до бази:", formattedQuery);
+    console.log(`querrys: ${JSON.stringify(querySelectors)}, 
+    selector: ${sqlSelect}`);
+    const [rows] = await pool.query<RowDataPacket[]>(sqlSelect, querySelectors);
     const [countRows] = await pool.query<
       RowDataPacket[]
     >(`SELECT COUNT(*) AS total_books
@@ -49,7 +74,6 @@ app.get("/", async (req, res) => {
     const total = countRows[0]?.total_books ?? 0;
     const paginationHtml = renderPagination(offset, limit, total);
 
-    // + `ofset: ${offset}, limit: ${limit}, total: ${total}`;
     const template = await fs.readFile(BOOKS_TEMPLATE_PATH, "utf-8");
     const html = template
       .replace("<!--BOOKS-->", booksHtml)
@@ -63,7 +87,19 @@ app.get("/", async (req, res) => {
 
 app.get("/book/:id", async (req, res) => {
   try {
-    const id = req.params.id;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).send("Невірний ідентифікатор книги");
+    }
+    const [updateResult] = await pool.query<ResultSetHeader>(
+      `UPDATE books
+      SET views_count = views_count + 1 
+      WHERE id = ?`,
+      [id],
+    );
+    if (updateResult?.affectedRows === 0) {
+      return res.status(404).send("Книгу не знайдено");
+    }
     const [bookData] = await pool.query<RowDataPacket[]>(
       `SELECT 
         books.id AS bookId, 
@@ -78,15 +114,39 @@ app.get("/book/:id", async (req, res) => {
       FROM books 
       INNER JOIN book_authors ON books.id=book_authors.book_id
       INNER JOIN authors ON book_authors.author_id=authors.id
-      WHERE books.id=${id}`,
+      WHERE books.id=?`,
+      [id],
     );
-
+    if (bookData.length === 0) {
+      return res.status(404).send("Книгу не знайдено");
+    }
     const bookHtml = renderBook(bookData);
     const template = await fs.readFile(BOOK_PAGE_TEMPLATE_PATH, "utf-8");
     const html = template.replace("<!--BOOK-->", bookHtml);
     res.type("html").send(html);
   } catch (error) {
     console.error("Помилка підключення до БД:", error);
+    res.status(500).send("Помилка підключення до бази даних");
+  }
+});
+
+app.post("/book/", async (req, res) => {
+  const bookId = Number(req.body.bookId);
+  if (!Number.isInteger(bookId) || bookId <= 0) {
+    return res.status(400).send("Невірний ідентифікатор книги");
+  }
+  try {
+    const [updateClick] = await pool.query<ResultSetHeader>(
+      `UPDATE books
+      SET clicks_count = clicks_count + 1 
+      WHERE id = ?`,
+      [bookId],
+    );
+    if (updateClick?.affectedRows === 0) {
+      return res.status(404).send("Книгу не знайдено");
+    }
+    res.status(200).send({ ok: "OK" });
+  } catch (error) {
     res.status(500).send("Помилка підключення до бази даних");
   }
 });
@@ -168,18 +228,6 @@ function renderPagination(
   const nextOffset = offset + limit;
   const hasPrev = offset > 0;
   const hasNext = nextOffset < total;
-  // const currentPage = Math.floor(offset / limit) + 1;
-  // const totalPages = Math.ceil(total / limit);
-
-  // let pagesHtml = "";
-  // for (let i = 1; i <= totalPages; i++) {
-  //   const pageOffset = (i - 1) * limit;
-  //   const isActive = i === currentPage;
-  //   pagesHtml += `
-  //     <li class="page-item ${isActive ? "active" : ""}" style="list-style:none;">
-  //       <a class="page-link" href="/?offset=${pageOffset}&limit=${limit}"${isActive ? ' aria-current="page"' : ""}>${i}</a>
-  //     </li>`;
-  // }
 
   return `
     <div class="pagination-controls" style="margin-top:20px; display:flex; align-items:center; gap:10px;">
@@ -199,7 +247,3 @@ function renderPagination(
 app.listen(PORT, () => {
   console.log(`Сервер успішно запущено на http://localhost:${PORT}`);
 });
-
-//  <ul class="pagination" style="display:flex; list-style:none; margin:0; padding:0; gap:4px;">
-//     ${pagesHtml}
-//  </ul>
