@@ -6,6 +6,7 @@ import mysql, {
 import dotenv from "dotenv";
 import fs from "fs/promises";
 import path from "path";
+import type QueryString from "qs";
 dotenv.config();
 
 const app = express();
@@ -32,8 +33,9 @@ const BOOK_PAGE_TEMPLATE_PATH = path.join(
 app.get("/", async (req, res) => {
   try {
     const offset = Number(req.query["offset"]) || 0;
-    const limit = Number(req.query["limit"]) || 1;
+    const limit = Number(req.query["limit"]) || 20;
     const search = req.query["search"];
+    const author = req.query["author"];
 
     if (
       !Number.isInteger(offset) ||
@@ -49,10 +51,30 @@ app.get("/", async (req, res) => {
           INNER JOIN book_authors ON books.id=book_authors.book_id
           INNER JOIN authors ON book_authors.author_id=authors.id
           `;
+    const queryCountSelectors = [];
+    let sqlCountRows = `SELECT COUNT(*) AS total
+                FROM books 
+                INNER JOIN book_authors ON books.id=book_authors.book_id
+                INNER JOIN authors ON book_authors.author_id=authors.id
+                `;
+    let renderSearch;
     if (search) {
-      sqlSelect += `WHERE books.name LIKE ? OR authors.name LIKE ? `;
+      const sqlWhere = `WHERE books.name LIKE ? OR authors.name LIKE ? `;
+      sqlSelect += sqlWhere;
       querySelectors.push(`%${search}%`);
       querySelectors.push(`%${search}%`);
+      sqlCountRows += sqlWhere;
+      queryCountSelectors.push(`%${search}%`);
+      queryCountSelectors.push(`%${search}%`);
+      renderSearch = search;
+    }
+    if (author) {
+      const sqlWhere = `WHERE authors.name LIKE ? `;
+      sqlSelect += sqlWhere;
+      querySelectors.push(`%${author}%`);
+      sqlCountRows += sqlWhere;
+      queryCountSelectors.push(`%${author}%`);
+      renderSearch = author;
     }
     querySelectors.push(limit);
     querySelectors.push(offset);
@@ -62,17 +84,15 @@ app.get("/", async (req, res) => {
     console.log(`querrys: ${JSON.stringify(querySelectors)}, 
     selector: ${sqlSelect}`);
     const [rows] = await pool.query<RowDataPacket[]>(sqlSelect, querySelectors);
-    const [countRows] = await pool.query<
-      RowDataPacket[]
-    >(`SELECT COUNT(*) AS total_books
-          FROM books 
-          INNER JOIN book_authors ON books.id=book_authors.book_id
-          INNER JOIN authors ON book_authors.author_id=authors.id`);
+    const [countRows] = await pool.query<RowDataPacket[]>(
+      sqlCountRows,
+      queryCountSelectors,
+    );
     const booksHtml = rows
       .map((row) => renderBookItem(row.bookId, row.bookName, row.authorName))
       .join("\n");
-    const total = countRows[0]?.total_books ?? 0;
-    const paginationHtml = renderPagination(offset, limit, total);
+    const total = countRows[0]?.total ?? 0;
+    const paginationHtml = renderPagination(offset, limit, total, renderSearch);
 
     const template = await fs.readFile(BOOKS_TEMPLATE_PATH, "utf-8");
     const html = template
@@ -163,8 +183,8 @@ function renderBook(book: RowDataPacket[]): string {
               </div>
               <div class="col-xs-12 col-sm-12 col-md-12 col-lg-12">
                 <div class="bookLastInfo">
-                  <div class="bookRow"><span class="properties">автор:</span><span id="author">__AUTHOR__</span></div>
-                  <div class="bookRow"><span class="properties">год:</span><span id="year">__YEAR__</span></div>
+                  <div class="bookRow"><span class="properties">автор:</span><a href="http://localhost:${PORT}/?author=__AUTHOR__"><span id="author">__AUTHOR__</span></a></div>
+                  <div class="bookRow"><span class="properties">год:</span><a href="http://localhost:${PORT}/?year=__YEAR__"><span id="year">__YEAR__</span></a></div>
                   <div class="bookRow"><span class="properties">страниц:</span><span id="pages">__PAGES__</span></div>
                   <div class="bookRow"><span class="properties">isbn:</span><span id="isbn">__ISBN__</span></div>
                 </div>
@@ -223,22 +243,29 @@ function renderPagination(
   offset: number,
   limit: number,
   total: number,
+  search:
+    | string
+    | QueryString.ParsedQs
+    | (string | QueryString.ParsedQs)[]
+    | undefined,
 ): string {
   const prevOffset = Math.max(0, offset - limit);
   const nextOffset = offset + limit;
   const hasPrev = offset > 0;
   const hasNext = nextOffset < total;
-
+  const searchTag = `<input type="hidden" name="search" value="${search}">`;
   return `
     <div class="pagination-controls" style="margin-top:20px; display:flex; align-items:center; gap:10px;">
       <form method="GET" action="/" style="display:inline;">
         <input type="hidden" name="offset" value="${prevOffset}">
         <input type="hidden" name="limit" value="${limit}">
+        ${search ? searchTag : ""}
         <button type="submit" class="btn btn-default" ${hasPrev ? "" : "disabled"}>← Назад</button>
       </form>
       <form method="GET" action="/" style="display:inline;">
         <input type="hidden" name="offset" value="${nextOffset}">
         <input type="hidden" name="limit" value="${limit}">
+        ${search ? searchTag : ""}
         <button type="submit" class="btn btn-default" ${hasNext ? "" : "disabled"}>Вперед →</button>
       </form>
     </div>`;
