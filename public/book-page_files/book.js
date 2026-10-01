@@ -76,21 +76,60 @@ $(".btnBookID").click(async function (event) {
       },
     };
     try {
+      console.log("1. Початок кліку спрацював");
       const apiResponse = await fetch("http://localhost:5000/book/", postData);
       if (!apiResponse.ok) {
         throw new Error(`Помилка запиту: ${apiResponse.status}`);
       }
-      const statusCode = apiResponse.json();
-      console.log(`response: ${statusCode}`);
-      alert(
-        "Книга свободна и ты можешь прийти за ней." +
-          " Наш адрес: г. Кропивницкий, переулок Васильевский 10, 5 этаж." +
-          " Лучше предварительно прозвонить и предупредить нас, чтоб " +
-          " не попасть в неловкую ситуацию. Тел. 099 196 24 69" +
-          " \n\n" +
-          "******************\n",
-      );
+      console.log("2");
+      const modal = `<div class="modal fade" tabindex="-1" role="dialog" id="modalTour">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content" style="border-radius: 12px; padding: 20px;">
+      <div class="modal-body">
+        <h2 style="font-weight: bold; margin-bottom: 20px;">Книга вільна і ти можеш прийти за нею.</h2>
+        <ul style="list-style: none; padding: 0;" class="d-grid gap-4 my-5">
+          <li style="margin-bottom: 15px;">
+          <p style="margin: 0; color: #666;">Наша адреса: м. Кропивницький, пер Василевський 10, 5 пов.
+           Краще завчасно передзвонити та попередити нас, щоб не попасти в незручну ситуацію.</p>
+          <h5 style="margin: 0; font-weight: bold;">тел: 099 196 24 69</h5>
+          </li>
+        </ul>
+        <button type="button" class="btn btn-primary btn-lg" style="width: 100%; margin-top: 20px;" data-dismiss="modal">ОК, дякую!</button>
+      </div>
+    </div>
+  </div>
+</div>`;
+      console.log("3");
+      $("body").append(modal);
+      console.log("4");
+      var $modal = $("#modalTour");
+      $modal.show().addClass("in");
+      $("body").addClass("modal-open");
+
+      // Створюємо бекдроп (затемнення фону) вручну
+      if ($(".modal-backdrop").length === 0) {
+        $("body").append('<div class="modal-backdrop fade in"></div>');
+      }
+
+      // Обробник закриття при кліку на кнопку або фон
+      $modal.find('[data-dismiss="modal"]').on("click", function () {
+        $modal.removeClass("in").hide();
+        $(".modal-backdrop").remove();
+        $("body").removeClass("modal-open");
+        $modal.remove(); // Видаляємо з DOM після закриття
+      });
+
+      console.log("5");
+      console.log("5");
+      // alert(
+      //   "Книга свободна и ты можешь прийти за ней." +
+      //     " Наш адрес: г. Кропивницкий, переулок Васильевский 10, 5 этаж." +
+      //     " Лучше предварительно прозвонить и предупредить нас, чтоб " +
+      //     " не попасть в неловкую ситуацию. Тел. 099 196 24 69" +
+      //     " \n\n",
+      // );
     } catch (error) {
+      console.error("Деталі помилки:", error);
       alert(
         `Виникла помилка на сервері, спробуйте будь-ласка пізніше. \n статус: ${error}`,
       );
