@@ -1,0 +1,139 @@
+:root {
+  --bs-body-font-family: 'PT Sans', Arial, sans-serif;
+  --bs-body-color: #2c3e50;
+  --bs-success: #27ae60;
+  --bs-success-rgb: 39, 174, 96;
+}
+
+/* зелена кнопка */
+.btn-success {
+  --bs-btn-bg: #27ae60;
+  --bs-btn-border-color: #31b167;
+  --bs-btn-hover-bg: #2cc56d;
+  --bs-btn-hover-border-color: #34b96c;
+  --bs-btn-color: #fff;
+  --bs-btn-hover-color: #fff;
+}
+
+/* шапка */
+.header-green { border-bottom: 5px solid #27ae60; }
+.logo .sh, .logo .plus {
+  font: bold 60px/60px Arial, sans-serif;
+}
+.logo .sh   { color: #000; }
+.logo .plus { color: #27ae60; }
+
+/* футер */
+footer .heart i { color: #dc4242; padding: 0 5px; }
+footer .heart i:hover { color: #fff; }
+
+/* картка книги */
+.book { text-align: center; padding: 20px 10px; }
+.book:hover { box-shadow: 0 3px 7px 1px rgba(195,195,195,.27); }
+.book img { height: 128px; width: auto; }
+/* рамка з написом зверху */
+.add-book-box {
+
+  border: 2px solid #2c3e50;
+  border-radius: 6px;
+  padding: 1rem 1.25rem 1.25rem;
+  background: #fff;
+}
+
+/* Bootstrap за замовчуванням розтягує legend на всю ширину, повертаємо як було */
+.add-book-box legend {
+  float: none;
+  width: auto;
+  margin: 0;
+  padding: 0 .5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #2c3e50;
+}
+
+/* поля */
+.add-book-box .form-control {
+  border: 2px solid #2c3e50;
+  border-radius: 4px;
+  font-style: italic;
+}
+.add-book-box .form-control:focus {
+  border-color: #27ae60;
+  box-shadow: 0 0 0 .2rem rgba(39, 174, 96, .25);
+}
+.add-book-box .form-control::placeholder {
+  color: #999;
+}
+.add-book-box textarea {
+  resize: vertical;
+}
+
+/* прев'ю обкладинки */
+.cover-preview {
+  display: block;
+  width: 100px;
+  height: 130px;
+  object-fit: cover;
+  border: 1px solid #ccc;
+  background: #f5f5f5;
+}
+
+/* підпис внизу */
+.add-book-note {
+  font-size: .8rem;
+  color: #2c3e50;
+}
+/* таблиця книг */
+.books-table {
+  border: 2px solid #2c3e50;
+  --bs-table-striped-bg: #f0f2f4;
+}
+.books-table thead th {
+  background: #2c3e50;
+  color: #fff;
+  font-weight: 600;
+  border-color: #2c3e50;
+  white-space: nowrap;
+}
+.books-table td,
+.books-table th {
+  padding: .6rem .75rem;
+}
+
+/* клітинка: мініатюра + назва */
+.book-title-cell {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  min-width: 180px;
+}
+.book-thumb {
+  width: 40px;
+  height: 55px;
+  object-fit: cover;
+  border: 1px solid #ccc;
+  background: #f5f5f5;
+  flex-shrink: 0;
+}
+.book-name {
+  font-weight: 600;
+}
+
+/* пагінація в кольорі сайту */
+.pagination {
+  --bs-pagination-color: #27ae60;
+  --bs-pagination-hover-color: #1e8449;
+  --bs-pagination-active-bg: #27ae60;
+  --bs-pagination-active-border-color: #27ae60;
+  --bs-pagination-focus-box-shadow: 0 0 0 .2rem rgba(39, 174, 96, .25);
+}
+/* Клікабельні заголовки таблиці */
+.books-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.2s ease;
+}
+
+.books-table th.sortable:hover {
+  background-color: #1a252f; /* трохи темніший відтінок основного #2c3e50 */
+}

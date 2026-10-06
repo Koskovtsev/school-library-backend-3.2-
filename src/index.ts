@@ -6,6 +6,7 @@ import mysql, {
 import dotenv from "dotenv";
 import fs from "fs/promises";
 import path from "path";
+import multer from "multer";
 dotenv.config();
 
 interface IDBResponse {
@@ -37,6 +38,16 @@ const pool = mysql.createPool({
   connectionLimit: 10,
   queueLimit: 0,
 });
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, "public/book-covers/");
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
+  },
+});
+const upload = multer({ storage: storage });
 app.use(express.json());
 app.use(express.static("public", { index: false }));
 const BOOKS_TEMPLATE_PATH = path.join(process.cwd(), "views", "index.html");
@@ -58,6 +69,7 @@ async function getDataFromDB(
           INNER JOIN book_authors ON books.id = book_authors.book_id
           INNER JOIN authors ON book_authors.author_id = authors.id `;
   const select = ` SELECT books.id AS bookId, books.name AS bookName, authors.name AS authorName `;
+  const adminSelect = `, books.views_count AS bookViews, books.year AS bookYear, books.clicks_count AS bookClicks `;
   const selectCount = ` SELECT COUNT(*) AS total `;
   let where = "";
 
@@ -87,7 +99,7 @@ async function getDataFromDB(
   }
 
   const limitOffset = ` LIMIT ? OFFSET ? `;
-  const selectSql = `${select} ${fromJoins} ${where} ${limitOffset};`;
+  const selectSql = `${isAdmin ? select + adminSelect : select} ${fromJoins} ${where} ${limitOffset};`;
   const countSql = `${selectCount} ${fromJoins} ${where};`;
 
   try {
@@ -121,23 +133,33 @@ function renderAdminBookPanel(
   views: number,
   clicks: number,
 ): string {
-  return "";
+  const html = `<tr>
+                  <td>
+                    <div class="book-title-cell">
+                      <img class="book-thumb" src="/book-covers/__ID__.jpg" alt="обкладинка">
+                       <span class="book-name">__TITLE__</span>
+                    </div>
+                  </td>
+                  <td>
+                    <ul class="list-unstyled mb-0">
+                      <li>__AUTHOR__</li>
+                    </ul>
+                  </td>
+                  <td>__YEAR__</td>
+                  <td><button type="button" class="btn btn-sm btn-outline-danger">Видалити</button></td>
+                  <td>__CLICKS__</td>           
+                </tr>`;
+  return (
+    html
+      .replace(/__ID__/g, String(id))
+      .replace(/__AUTHOR__/g, escapeHtml(author))
+      .replace(/__TITLE__/g, escapeHtml(title))
+      // .replace(/__ISBN__/g, String(isbn))
+      .replace(/__YEAR__/g, String(year))
+      .replace(/__CLICKS__/g, String(clicks))
+  );
+  // .replace(/__CLICKS__/g, String(clicks));
 }
-app.get("/", async (req, res) => {
-  const params = parseListParams(req);
-  if (!params) {
-    return res.status(400).send("Невірний формат query параметрів");
-  }
-
-  try {
-    const html = isAdmin(req)
-      ? await buildAdminPage(params)
-      : await buildUserPage(params);
-    res.type("html").send(html);
-  } catch (error) {
-    res.status(500).send("Помилка підключення до бази даних");
-  }
-});
 
 function parseListParams(req: express.Request): ListParams | null {
   const offset = Number(req.query["offset"]) || 0;
@@ -197,8 +219,8 @@ async function buildAdminPage({ offset, limit, queryFilter }: ListParams) {
           row.authorName,
           row.bookYear,
           row.bookIsbn,
-          row.views,
-          row.clicks,
+          row.bookViews,
+          row.bookClicks,
         ),
       )
       .join("\n");
@@ -312,9 +334,96 @@ app.post("/book/", async (req, res) => {
   }
 });
 
+app.get("/", async (req, res) => {
+  const params = parseListParams(req);
+  if (!params) {
+    return res.status(400).send("Невірний формат query параметрів");
+  }
+
+  try {
+    const html = isAdmin(req)
+      ? await buildAdminPage(params)
+      : await buildUserPage(params);
+    res.type("html").send(html);
+  } catch (error) {
+    res.status(500).send("Помилка підключення до бази даних");
+  }
+});
+
+app.post("/add", upload.single("cover"), async (req, res) => {
+  const title = String(req.body.title || "");
+  const admin = isAdmin(req);
+  const year = req.body.year ? Number(req.body.year) : null;
+  const coverUrl = req.query["cover_url"];
+  const authorOne = String(req.body.author1 || "");
+  const descriptiopn = String(req.body.description || "");
+  if (!title || !authorOne) {
+    res.status(400).send("нема назви книги чи автора");
+    return;
+  }
+  const values: (string | number | null)[] = [title, descriptiopn, year];
+
+  try {
+    const addBook = `
+    INSERT INTO books (create_time, name, description, year) 
+    VALUES (NOW(), ?, ?, ?);
+    `;
+    const [result] = await pool.execute<mysql.ResultSetHeader>(addBook, values);
+    if (result.affectedRows === 0) {
+      console.log(`Книгу не додано!`);
+      res.status(500).send("Щось із базою, книга є але не додалась");
+      return;
+    }
+    const bookId = result.insertId;
+    const findAuthor = `
+    SELECT authors.name AS authorName, authors.id AS authorId
+    FROM authors
+    WHERE authors.name=?
+    `;
+    const [author] = await pool.query<RowDataPacket[]>(findAuthor, [authorOne]);
+    let authorId = author[0]?.authorId;
+    if (!authorId) {
+      const addAuthor = `
+      INSERT INTO authors (create_time, name)
+      VALUES (NOW(), ?)
+      `;
+      const [authorResult] = await pool.execute<mysql.ResultSetHeader>(
+        addAuthor,
+        [authorOne],
+      );
+      authorId = authorResult.insertId;
+    }
+    const bookAuthor = `
+      INSERT INTO book_authors (book_id, author_id) 
+      VALUES (?,?)
+    `;
+    const [bookAuthorResponse] = await pool.execute<mysql.ResultSetHeader>(
+      bookAuthor,
+      [bookId, authorId],
+    );
+    if (bookAuthorResponse.affectedRows === 0) {
+      res.status(400).send("якась помилка в кінці");
+      return;
+    }
+    res.redirect("/?admin=1");
+  } catch (error) {
+    res.status(500).send("Помилка підключення до бази даних");
+  }
+  console.log(`this is querry: ${JSON.stringify(req.body)}`);
+});
+
+app.post("/upload/image", upload.single("cover"), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "Файл не знайдено" });
+  }
+  const filePath = `/book-covers/${req.file.filename}`;
+
+  res.json({ success: true, filePath: filePath });
+});
+
 function renderBook(book: RowDataPacket[]): string {
   return `<div id="id" book-id="__ID__">
-            <div id="bookImg" class="col-xs-12 col-sm-3 col-md-3 item"><img src="/book-page_files/__ID__.jpg"
+            <div id="bookImg" class="col-xs-12 col-sm-3 col-md-3 item"><img src="/book-covers/__ID__.jpg"
               alt="Responsive image" class="img-responsive">
               <hr>
             </div>
@@ -365,7 +474,7 @@ function escapeHtml(str: string): string {
 function renderBookPanel(id: number, title: string, author: string): string {
   return `<div data-book-id="__ID__" class="book_item col-xs-6 col-sm-3 col-md-2 col-lg-2">
             <div class="book">
-              <a href="http://localhost:${PORT}/book/__ID__"><img src="./books-page_files/__ID__.jpg" alt="__TITLE__">
+              <a href="http://localhost:${PORT}/book/__ID__"><img src="/book-covers/__ID__.jpg" alt="__TITLE__">
                 <div data-title="__TITLE__" class="blockI" style="height: 46px;">
                  <div data-book-title="__TITLE__" class="title size_text">__TITLE__</div>
                   <div data-book-author="__AUTHOR__" class="author">__AUTHOR__</div>
@@ -387,7 +496,27 @@ function renderAdminPagination(
   total: number,
   filter: QueryFilter,
 ): string {
-  return "";
+  const html = `<nav aria-label="Page navigation example">
+                  <ul class="pagination">
+                    <li class="page-item">
+                      <a class="page-link" href="#" aria-label="Previous">
+                        <span aria-hidden="true">&laquo;</span>
+                      </a>
+                    </li>
+                    <li class="page-item"><a class="page-link" href="#">1</a></li>
+                    <li class="page-item"><a class="page-link" href="#">2</a></li>
+                    <li class="page-item"><a class="page-link" href="#">3</a></li>
+                    <li class="page-item"><a class="page-link" href="#">4</a></li>
+                    <li class="page-item"><a class="page-link" href="#">5</a></li>
+                    <li class="page-item"><a class="page-link" href="#">6</a></li>
+                    <li class="page-item">
+                      <a class="page-link" href="#" aria-label="Next">
+                        <span aria-hidden="true">&raquo;</span>
+                      </a>
+                    </li>
+                  </ul>
+                </nav>`;
+  return html;
 }
 
 function renderPagination(

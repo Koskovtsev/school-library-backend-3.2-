@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="uk">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>адмін панель</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- CDN Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <link href="/admin-page_files/admin-styles.css" rel="stylesheet">
+</head>
+
+<body class="d-flex flex-column min-vh-100">
+    <header class="header-green bg-white">
+        <div class="container py-3">
+            <div class="row align-items-center g-3">
+                <div class="col-5 col-sm-2">
+                    <a href="/" class="logo text-decoration-none"><span class="sh">Ш</span><span
+                            class="plus">++</span></a>
+                </div>
+                <div class="col-12 col-sm-7 col-md-8 order-3 order-sm-2">
+                    <form method="GET" action="/">
+                        <input id="search" name="search" type="text" class="form-control" placeholder="Знайти книгу">
+                    </form>
+                </div>
+                <div class="col-7 col-sm-3 col-md-2 order-2 order-sm-3 text-end">
+                    <a href="https://www.facebook.com/shpp.kr/" target="_blank" class="text-success me-2"><i
+                            class="fa fa-facebook fa-lg"></i></a>
+                    <a href="http://programming.kr.ua/ru/courses#faq" target="_blank" class="text-success"><i
+                            class="fa fa-book fa-lg"></i></a>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-grow-1 py-4">
+        <div class="container">
+            <div class="row g-4">
+                <div class="col-lg-7">
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover align-middle books-table">
+                            <thead>
+                                <tr>
+                                    <th scope="col" class="sortable" data-sort="title"><span>Назва книги</span>
+                                        <i class="bi bi-arrow-down-up ms-1 text-white-50"></i>
+                                    </th>
+                                    <th scope="col">Автори</th>
+                                    <th scope="col" class="sortable text-nowrap" data-sort="year">
+                                        <span>Рік</span>
+                                        <i class="bi bi-arrow-down-up ms-1 text-white-50"></i>
+                                    </th>
+                                    <th scope="col" class="text-nowrap">Дії</th>
+                                    <!-- <th scope="col" class="sortable text-nowrap" data-sort="clicks">
+                                        <span>ISBN</span>
+                                        <i class="bi bi-arrow-down-up ms-1 text-white-50"></i>
+                                    </th> -->
+                                    <th scope="col" class="sortable text-nowrap" data-sort="clicks">
+                                        <span>Кліків</span>
+                                        <i class="bi bi-arrow-down-up ms-1 text-white-50"></i>
+                                    </th>
+                                    <!-- <th scope="col" class="sortable text-nowrap" data-sort="views">
+                                        <span>Переглядів</span>
+                                        <i class="bi bi-arrow-down-up ms-1 text-white-50"></i>
+                                    </th> -->
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!--BOOKS-->
+                            </tbody>
+                        </table>
+                    </div>
+                    <!--PAGINATION-->
+                </div>
+                <aside class="col-lg-5">
+                    <!--ADD_FORM-->
+                    <form id="addBookForm" enctype="multipart/form-data" method="POST" action="/add/">
+                        <fieldset class="add-book-box">
+                            <legend>додати нову книгу</legend>
+
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <input type="hidden" name="admin" value="1">
+                                    <input class="form-control mb-3" type="text" name="title" placeholder="назва книги"
+                                        required>
+                                    <input class="form-control mb-3" type="number" name="year"
+                                        placeholder="рік видання">
+                                    <input class="form-control mb-3" type="file" name="cover" id="coverInput"
+                                        accept="image/*">
+                                    <input type="hidden" id="coverPathInput" name="cover_url"
+                                        value="/admin-page_files/no_cover_available.png">
+                                    <img id="coverPreview" class="cover-preview"
+                                        src="/admin-page_files/no_cover_available.png" alt="обкладинка">
+                                </div>
+                                <div class="col-md-6">
+                                    <input class="form-control mb-3" type="text" name="author1" placeholder="автор 1">
+                                    <input class="form-control mb-3" type="text" name="author2" placeholder="автор 2">
+                                    <input class="form-control mb-3" type="text" name="author3" placeholder="автор 3">
+                                    <textarea class="form-control" name="description" rows="5"
+                                        placeholder="опис книги"></textarea>
+                                </div>
+                            </div>
+                            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-3">
+                                <button type="submit" class="btn btn-success">Додати <i
+                                        class="fa fa-angle-right ms-1"></i></button>
+                                <small class="add-book-note">*залиште поля порожніми, якщо авторів менше трьох</small>
+                            </div>
+                        </fieldset>
+                    </form>
+                </aside>
+            </div>
+        </div>
+    </main>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/admin-page_files/admin.js"></script>
+</body>
+
+</html>
