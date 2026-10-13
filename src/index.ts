@@ -13,7 +13,7 @@ interface IDBResponse {
   rows: RowDataPacket[];
   totalFindedItems: number;
 }
-
+type PageItem = number | "ellipsis";
 type ListParams = {
   offset: number;
   limit: number;
@@ -68,7 +68,7 @@ async function getDataFromDB(
   const fromJoins = ` FROM books
           INNER JOIN book_authors ON books.id = book_authors.book_id
           INNER JOIN authors ON book_authors.author_id = authors.id `;
-  const select = ` SELECT books.id AS bookId, books.name AS bookName, authors.name AS authorName `;
+  const select = ` SELECT books.id AS bookId, books.name AS bookName, books.cover_url AS bookCover, authors.name AS authorName `;
   const adminSelect = `, books.views_count AS bookViews, books.year AS bookYear, books.clicks_count AS bookClicks `;
   const selectCount = ` SELECT COUNT(*) AS total `;
   let where = "";
@@ -120,14 +120,15 @@ async function getDataFromDB(
   }
 }
 
-function renderAddBookForm() {
-  return "";
-}
+// function renderAddBookForm() {
+//   return "";
+// }
 
 function renderAdminBookPanel(
   id: number,
   title: string,
   author: string,
+  cover: string,
   year: number,
   isbn: number,
   views: number,
@@ -136,7 +137,7 @@ function renderAdminBookPanel(
   const html = `<tr>
                   <td>
                     <div class="book-title-cell">
-                      <img class="book-thumb" src="/book-covers/__ID__.jpg" alt="обкладинка">
+                      <img class="book-thumb" src="__COVER__" alt="обкладинка">
                        <span class="book-name">__TITLE__</span>
                     </div>
                   </td>
@@ -146,7 +147,12 @@ function renderAdminBookPanel(
                     </ul>
                   </td>
                   <td>__YEAR__</td>
-                  <td><button type="button" class="btn btn-sm btn-outline-danger">Видалити</button></td>
+                  <td>
+                    <form id="delBookForm" method="DEL" action="/del/">
+                      <input type="hidden" name="book_id" value="__ID__">
+                      <button type="submit" class="btn btn-sm btn-outline-danger delete-book">Видалити</button>
+                    </form>
+                  </td>
                   <td>__CLICKS__</td>           
                 </tr>`;
   return (
@@ -154,11 +160,11 @@ function renderAdminBookPanel(
       .replace(/__ID__/g, String(id))
       .replace(/__AUTHOR__/g, escapeHtml(author))
       .replace(/__TITLE__/g, escapeHtml(title))
+      .replace(/__COVER__/g, escapeHtml(cover))
       // .replace(/__ISBN__/g, String(isbn))
       .replace(/__YEAR__/g, String(year))
       .replace(/__CLICKS__/g, String(clicks))
   );
-  // .replace(/__CLICKS__/g, String(clicks));
 }
 
 function parseListParams(req: express.Request): ListParams | null {
@@ -186,7 +192,14 @@ async function buildUserPage({ offset, limit, queryFilter }: ListParams) {
       queryFilter,
     );
     const booksHtml = rows
-      .map((row) => renderBookPanel(row.bookId, row.bookName, row.authorName))
+      .map((row) =>
+        renderBookPanel(
+          row.bookId,
+          row.bookName,
+          row.authorName,
+          row.bookCover,
+        ),
+      )
       .join("\n");
     const paginationHtml = renderPagination(
       offset,
@@ -217,6 +230,7 @@ async function buildAdminPage({ offset, limit, queryFilter }: ListParams) {
           row.bookId,
           row.bookName,
           row.authorName,
+          row.bookCover,
           row.bookYear,
           row.bookIsbn,
           row.bookViews,
@@ -226,16 +240,16 @@ async function buildAdminPage({ offset, limit, queryFilter }: ListParams) {
       .join("\n");
     const paginationHtml = renderAdminPagination(
       offset,
-      limit,
+      2,
       totalFindedItems,
       queryFilter,
     );
-    const addForm = renderAddBookForm();
+    // const addForm = renderAddBookForm();
     const template = await fs.readFile(ADMIN_TEMPLATE_PATH, "utf-8");
     return template
       .replace("<!--BOOKS-->", booksBlock)
-      .replace("<!--PAGINATION-->", paginationHtml)
-      .replace("<!--ADD_FORM-->", addForm);
+      .replace("<!--PAGINATION-->", paginationHtml);
+    // .replace("<!--ADD_FORM-->", addForm);
   } catch (error) {
     throw error;
   }
@@ -277,6 +291,7 @@ async function getBookData(id: number): Promise<RowDataPacket[]> {
       books.year AS bookYear,
       books.n_pages AS bookPages,
       books.isbn AS bookIsbn,
+      books.cover_url AS bookCover,
       books.views_count AS bookViewsCount,
       books.clicks_count AS bookClicksCount,
       authors.name AS authorName
@@ -292,8 +307,34 @@ async function getBookData(id: number): Promise<RowDataPacket[]> {
   }
 }
 
-app.get("/book/:id", async (req, res) => {
+async function delBookFromDB(id: number): Promise<boolean> {
+  const delBook = `DELETE FROM books WHERE id = ?;`;
+  const [bookResponse] = await pool.execute<mysql.ResultSetHeader>(delBook, [
+    id,
+  ]);
+  return bookResponse.affectedRows !== 0;
+}
+
+app.delete("/del/:id", async (req, res) => {
   const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).send("Невірний ідентифікатор книги");
+  }
+
+  try {
+    const isBookDeleted = await delBookFromDB(id);
+    if (!isBookDeleted) {
+      res.status(400).send("Не вдалось видалити книгу з БД");
+      return;
+    }
+    res.redirect("/?admin=1");
+  } catch (error) {
+    console.error("Помилка підключення до БД:", error);
+    res.status(500).send("Помилка підключення до бази даних");
+  }
+});
+app.get("/book", async (req, res) => {
+  const id = Number(req.body.book_id);
   if (!Number.isInteger(id) || id <= 0) {
     return res.status(400).send("Невірний ідентифікатор книги");
   }
@@ -350,66 +391,86 @@ app.get("/", async (req, res) => {
   }
 });
 
-app.post("/add", upload.single("cover"), async (req, res) => {
+function getAdminParams(req: express.Request) {
   const title = String(req.body.title || "");
   const admin = isAdmin(req);
   const year = req.body.year ? Number(req.body.year) : null;
-  const coverUrl = req.query["cover_url"];
+  const coverUrl = String(req.body.cover_url) || "";
   const authorOne = String(req.body.author1 || "");
   const descriptiopn = String(req.body.description || "");
-  if (!title || !authorOne) {
-    res.status(400).send("нема назви книги чи автора");
-    return;
-  }
-  const values: (string | number | null)[] = [title, descriptiopn, year];
 
-  try {
-    const addBook = `
-    INSERT INTO books (create_time, name, description, year) 
-    VALUES (NOW(), ?, ?, ?);
+  return { title, admin, year, coverUrl, authorOne, descriptiopn };
+}
+
+async function addBookToDB(values: (string | number | null)[], author: string) {
+  const addBook = `
+    INSERT INTO books (create_time, name, description, year, cover_url) 
+    VALUES (NOW(), ?, ?, ?, ?);
     `;
-    const [result] = await pool.execute<mysql.ResultSetHeader>(addBook, values);
-    if (result.affectedRows === 0) {
-      console.log(`Книгу не додано!`);
-      res.status(500).send("Щось із базою, книга є але не додалась");
-      return;
-    }
-    const bookId = result.insertId;
-    const findAuthor = `
+  const [result] = await pool.execute<mysql.ResultSetHeader>(addBook, values);
+  if (result.affectedRows === 0) {
+    // console.log(`Книгу не додано!`);
+    return false;
+  }
+  const bookId = result.insertId;
+  const findAuthor = `
     SELECT authors.name AS authorName, authors.id AS authorId
     FROM authors
     WHERE authors.name=?
     `;
-    const [author] = await pool.query<RowDataPacket[]>(findAuthor, [authorOne]);
-    let authorId = author[0]?.authorId;
-    if (!authorId) {
-      const addAuthor = `
+  const [newAuthor] = await pool.query<RowDataPacket[]>(findAuthor, [author]);
+  let authorId = newAuthor[0]?.authorId;
+  if (!authorId) {
+    const addAuthor = `
       INSERT INTO authors (create_time, name)
       VALUES (NOW(), ?)
       `;
-      const [authorResult] = await pool.execute<mysql.ResultSetHeader>(
-        addAuthor,
-        [authorOne],
-      );
-      authorId = authorResult.insertId;
-    }
-    const bookAuthor = `
+    const [authorResult] = await pool.execute<mysql.ResultSetHeader>(
+      addAuthor,
+      [author],
+    );
+    authorId = authorResult.insertId;
+  }
+  const bookAuthor = `
       INSERT INTO book_authors (book_id, author_id) 
       VALUES (?,?)
     `;
-    const [bookAuthorResponse] = await pool.execute<mysql.ResultSetHeader>(
-      bookAuthor,
-      [bookId, authorId],
-    );
-    if (bookAuthorResponse.affectedRows === 0) {
-      res.status(400).send("якась помилка в кінці");
+  const [bookAuthorResponse] = await pool.execute<mysql.ResultSetHeader>(
+    bookAuthor,
+    [bookId, authorId],
+  );
+  return bookAuthorResponse.affectedRows !== 0;
+}
+
+app.post("/add", upload.single("cover"), async (req, res) => {
+  const { title, admin, year, coverUrl, authorOne, descriptiopn } =
+    getAdminParams(req);
+
+  // if (!admin) {
+  //   res.status(403).send("Не авторизовано");
+  //   return;
+  // }
+
+  if (!title || !authorOne) {
+    res.status(400).send("Нема назви книги чи автора");
+    return;
+  }
+  const values: (string | number | null)[] = [
+    title,
+    descriptiopn,
+    year,
+    coverUrl,
+  ];
+  try {
+    const isBookAdded = await addBookToDB(values, authorOne);
+    if (!isBookAdded) {
+      res.status(400).send("Не вдалось додати книгу до БД");
       return;
     }
     res.redirect("/?admin=1");
   } catch (error) {
     res.status(500).send("Помилка підключення до бази даних");
   }
-  console.log(`this is querry: ${JSON.stringify(req.body)}`);
 });
 
 app.post("/upload/image", upload.single("cover"), async (req, res) => {
@@ -423,7 +484,7 @@ app.post("/upload/image", upload.single("cover"), async (req, res) => {
 
 function renderBook(book: RowDataPacket[]): string {
   return `<div id="id" book-id="__ID__">
-            <div id="bookImg" class="col-xs-12 col-sm-3 col-md-3 item"><img src="/book-covers/__ID__.jpg"
+            <div id="bookImg" class="col-xs-12 col-sm-3 col-md-3 item"><img src="__COVER__"
               alt="Responsive image" class="img-responsive">
               <hr>
             </div>
@@ -460,10 +521,12 @@ function renderBook(book: RowDataPacket[]): string {
     .replace(/__YEAR__/g, String(book[0]?.bookYear))
     .replace(/__PAGES__/g, String(book[0]?.bookPages))
     .replace(/__ISBN__/g, String(book[0]?.bookIsbn))
+    .replace(/__COVER__/g, escapeHtml(book[0]?.bookCover))
     .replace(/__DESCRIPTION__/g, escapeHtml(book[0]?.bookDescription));
 }
 
 function escapeHtml(str: string): string {
+  if (!str) return "";
   return str
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -471,10 +534,15 @@ function escapeHtml(str: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function renderBookPanel(id: number, title: string, author: string): string {
+function renderBookPanel(
+  id: number,
+  title: string,
+  author: string,
+  cover: string,
+): string {
   return `<div data-book-id="__ID__" class="book_item col-xs-6 col-sm-3 col-md-2 col-lg-2">
             <div class="book">
-              <a href="http://localhost:${PORT}/book/__ID__"><img src="/book-covers/__ID__.jpg" alt="__TITLE__">
+              <a href="http://localhost:${PORT}/book/__ID__"><img src="__COVER__" alt="__TITLE__">
                 <div data-title="__TITLE__" class="blockI" style="height: 46px;">
                  <div data-book-title="__TITLE__" class="title size_text">__TITLE__</div>
                   <div data-book-author="__AUTHOR__" class="author">__AUTHOR__</div>
@@ -487,7 +555,62 @@ function renderBookPanel(id: number, title: string, author: string): string {
           </div>`
     .replace(/__ID__/g, String(id))
     .replace(/__AUTHOR__/g, escapeHtml(author))
+    .replace(/__COVER__/g, escapeHtml(cover))
     .replace(/__TITLE__/g, escapeHtml(title));
+}
+
+/**
+ * Повертає список для відображення, напр. [1, 2, 3, "ellipsis", 14, 15, 16, "ellipsis", 30, 31, 32]
+ * edge     – скільки сторінок показувати на початку і в кінці
+ * siblings – скільки сторінок показувати навколо поточної
+ */
+function getPageItems(
+  currentPage: number,
+  totalPages: number,
+  edge = 3,
+  siblings = 1,
+): PageItem[] {
+  const pages = new Set<number>();
+
+  for (let i = 1; i <= Math.min(edge, totalPages); i++) pages.add(i);
+  for (let i = Math.max(totalPages - edge + 1, 1); i <= totalPages; i++) {
+    pages.add(i);
+  }
+  for (let i = currentPage - siblings; i <= currentPage + siblings; i++) {
+    if (i >= 1 && i <= totalPages) pages.add(i);
+  }
+
+  const sorted = [...pages].sort((a, b) => a - b);
+  const result: PageItem[] = [];
+  let prev = 0;
+
+  for (const page of sorted) {
+    const gap = page - prev;
+    if (gap === 2) {
+      result.push(prev + 1);
+    } else if (gap > 2) {
+      result.push("ellipsis");
+    }
+    result.push(page);
+    prev = page;
+  }
+
+  return result;
+}
+
+function buildPageUrl(
+  offset: number,
+  limit: number,
+  filter: QueryFilter,
+  extra: Record<string, string> = {},
+): string {
+  const params = new URLSearchParams(extra);
+  for (const [key, value] of Object.entries(filter)) {
+    if (value !== undefined) params.set(key, value);
+  }
+  params.set("offset", String(offset));
+  params.set("limit", String(limit));
+  return escapeHtml(`/?${params.toString()}`);
 }
 
 function renderAdminPagination(
@@ -496,27 +619,40 @@ function renderAdminPagination(
   total: number,
   filter: QueryFilter,
 ): string {
-  const html = `<nav aria-label="Page navigation example">
-                  <ul class="pagination">
-                    <li class="page-item">
-                      <a class="page-link" href="#" aria-label="Previous">
-                        <span aria-hidden="true">&laquo;</span>
-                      </a>
-                    </li>
-                    <li class="page-item"><a class="page-link" href="#">1</a></li>
-                    <li class="page-item"><a class="page-link" href="#">2</a></li>
-                    <li class="page-item"><a class="page-link" href="#">3</a></li>
-                    <li class="page-item"><a class="page-link" href="#">4</a></li>
-                    <li class="page-item"><a class="page-link" href="#">5</a></li>
-                    <li class="page-item"><a class="page-link" href="#">6</a></li>
-                    <li class="page-item">
-                      <a class="page-link" href="#" aria-label="Next">
-                        <span aria-hidden="true">&raquo;</span>
-                      </a>
-                    </li>
-                  </ul>
-                </nav>`;
-  return html;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const currentPage = Math.min(Math.floor(offset / limit) + 1, totalPages);
+  const pageUrl = (page: number) =>
+    buildPageUrl((page - 1) * limit, limit, filter, { admin: "1" });
+  const hasPrev = currentPage > 1;
+  const hasNext = currentPage < totalPages;
+
+  const prevHtml = hasPrev
+    ? `<li class="page-item"><a class="page-link" href="${pageUrl(currentPage - 1)}">&laquo;</a></li>`
+    : `<li class="page-item disabled"><span class="page-link">&laquo;</span></li>`;
+
+  const nextHtml = hasNext
+    ? `<li class="page-item"><a class="page-link" href="${pageUrl(currentPage + 1)}">&raquo;</a></li>`
+    : `<li class="page-item disabled"><span class="page-link">&raquo;</span></li>`;
+
+  const pagesHtml = getPageItems(currentPage, totalPages)
+    .map((item) => {
+      if (item === "ellipsis") {
+        return `<li class="page-item disabled"><span class="page-link">…</span></li>`;
+      }
+      if (item === currentPage) {
+        return `<li class="page-item active" aria-current="page"><span class="page-link">${item}</span></li>`;
+      }
+      return `<li class="page-item"><a class="page-link" href="${pageUrl(item)}">${item}</a></li>`;
+    })
+    .join("");
+
+  return `<nav aria-label="Навігація по сторінках">
+            <ul class="pagination">
+              ${prevHtml}
+              ${pagesHtml}
+              ${nextHtml}
+            </ul>
+          </nav>`;
 }
 
 function renderPagination(
