@@ -73,4 +73,11 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
   }
+  const logoutBtn = document.getElementById("logout");
+  if (logoutBtn) {
+    logoutBtn.addEventListener("click", () => {
+      console.log(`logout clicked`);
+      window.location.href = `/`;
+    });
+  }
 });

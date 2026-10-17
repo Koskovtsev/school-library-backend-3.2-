@@ -49,6 +49,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(express.static("public", { index: false }));
 const BOOKS_TEMPLATE_PATH = path.join(process.cwd(), "views", "index.html");
 const ADMIN_TEMPLATE_PATH = path.join(process.cwd(), "views", "admin.html");
@@ -65,24 +66,43 @@ async function getDataFromDB(
   isAdmin = false,
 ): Promise<IDBResponse> {
   const filterParams = [];
+  // const select = `
+  // SELECT
+  // books.id AS bookId,
+  // books.name AS bookName,
+  // books.cover_url AS bookCover,
+  // authors.name AS authorName
+  // `;
+  const select = `
+   SELECT 
+   books.id AS bookId, 
+   books.name AS bookName, 
+   books.cover_url AS bookCover, 
+   GROUP_CONCAT(authors.name SEPARATOR ', ') AS authorName 
+   `;
   const fromJoins = ` FROM books
           INNER JOIN book_authors ON books.id = book_authors.book_id
           INNER JOIN authors ON book_authors.author_id = authors.id `;
-  const select = ` SELECT books.id AS bookId, books.name AS bookName, books.cover_url AS bookCover, authors.name AS authorName `;
   const adminSelect = `, books.views_count AS bookViews, books.year AS bookYear, books.clicks_count AS bookClicks `;
-  const selectCount = ` SELECT COUNT(*) AS total `;
+  const selectCount = ` SELECT COUNT(DISTINCT books.id) AS total `;
   let where = "";
-
+  const authorSubquery = `
+  books.id IN (
+    SELECT bookAuthors.book_id
+    FROM book_authors AS bookAuthors
+    INNER JOIN authors AS author ON bookAuthors.author_id = author.id
+    WHERE author.name LIKE ?
+  )`;
   const whereSelector: Record<
     QueryFilterKey,
     { where: string; searchParams: string[] }
   > = {
     search: {
-      where: ` WHERE books.name LIKE ? OR authors.name LIKE ? `,
+      where: ` WHERE books.name LIKE ? OR ${authorSubquery} `,
       searchParams: [`%${queryFilter.search!}%`, `%${queryFilter.search!}%`],
     },
     author: {
-      where: ` WHERE authors.name LIKE ? `,
+      where: ` WHERE ${authorSubquery}`,
       searchParams: [`%${queryFilter.author!}%`],
     },
     year: {
@@ -97,9 +117,9 @@ async function getDataFromDB(
     where = whereSelector[activeQuerry].where;
     filterParams.push(...whereSelector[activeQuerry].searchParams);
   }
-
+  const groupBy = ` GROUP BY books.id `;
   const limitOffset = ` LIMIT ? OFFSET ? `;
-  const selectSql = `${isAdmin ? select + adminSelect : select} ${fromJoins} ${where} ${limitOffset};`;
+  const selectSql = `${isAdmin ? select + adminSelect : select} ${fromJoins} ${where} ${groupBy} ${limitOffset};`;
   const countSql = `${selectCount} ${fromJoins} ${where};`;
 
   try {
@@ -119,10 +139,6 @@ async function getDataFromDB(
     throw error;
   }
 }
-
-// function renderAddBookForm() {
-//   return "";
-// }
 
 function renderAdminBookPanel(
   id: number,
@@ -148,7 +164,7 @@ function renderAdminBookPanel(
                   </td>
                   <td>__YEAR__</td>
                   <td>
-                    <form id="delBookForm" method="DEL" action="/del/">
+                    <form id="delBookForm" method="POST" action="/del/">
                       <input type="hidden" name="book_id" value="__ID__">
                       <button type="submit" class="btn btn-sm btn-outline-danger delete-book">Видалити</button>
                     </form>
@@ -169,7 +185,7 @@ function renderAdminBookPanel(
 
 function parseListParams(req: express.Request): ListParams | null {
   const offset = Number(req.query["offset"]) || 0;
-  const limit = Number(req.query["limit"]) || 20;
+  const limit = Number(req.query["limit"]) || 10;
   if (
     !Number.isInteger(offset) ||
     offset < 0 ||
@@ -240,7 +256,7 @@ async function buildAdminPage({ offset, limit, queryFilter }: ListParams) {
       .join("\n");
     const paginationHtml = renderAdminPagination(
       offset,
-      2,
+      limit,
       totalFindedItems,
       queryFilter,
     );
@@ -294,7 +310,7 @@ async function getBookData(id: number): Promise<RowDataPacket[]> {
       books.cover_url AS bookCover,
       books.views_count AS bookViewsCount,
       books.clicks_count AS bookClicksCount,
-      authors.name AS authorName
+      GROUP_CONCAT(authors.name SEPARATOR '||') AS authorName
       FROM books 
       INNER JOIN book_authors ON books.id=book_authors.book_id
       INNER JOIN authors ON book_authors.author_id=authors.id
@@ -307,22 +323,22 @@ async function getBookData(id: number): Promise<RowDataPacket[]> {
   }
 }
 
-async function delBookFromDB(id: number): Promise<boolean> {
-  const delBook = `DELETE FROM books WHERE id = ?;`;
-  const [bookResponse] = await pool.execute<mysql.ResultSetHeader>(delBook, [
-    id,
-  ]);
-  return bookResponse.affectedRows !== 0;
+async function softDeleteBook(id: number): Promise<boolean> {
+  const [result] = await pool.execute<ResultSetHeader>(
+    `UPDATE books SET deleted_at = NOW() WHERE id = ? AND deleted_at IS NULL;`,
+    [id],
+  );
+  return result.affectedRows !== 0;
 }
 
-app.delete("/del/:id", async (req, res) => {
-  const id = Number(req.params.id);
+app.post("/del/", async (req, res) => {
+  const id = Number(req.body.book_id);
   if (!Number.isInteger(id) || id <= 0) {
     return res.status(400).send("Невірний ідентифікатор книги");
   }
 
   try {
-    const isBookDeleted = await delBookFromDB(id);
+    const isBookDeleted = await softDeleteBook(id);
     if (!isBookDeleted) {
       res.status(400).send("Не вдалось видалити книгу з БД");
       return;
@@ -333,8 +349,8 @@ app.delete("/del/:id", async (req, res) => {
     res.status(500).send("Помилка підключення до бази даних");
   }
 });
-app.get("/book", async (req, res) => {
-  const id = Number(req.body.book_id);
+app.get("/book/:id", async (req, res) => {
+  const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) {
     return res.status(400).send("Невірний ідентифікатор книги");
   }
@@ -395,61 +411,108 @@ function getAdminParams(req: express.Request) {
   const title = String(req.body.title || "");
   const admin = isAdmin(req);
   const year = req.body.year ? Number(req.body.year) : null;
+  const isbn = String(req.body.isbn || "");
+  const pagesNumber = req.body.n_pages ? Number(req.body.n_pages) : null;
   const coverUrl = String(req.body.cover_url) || "";
   const authorOne = String(req.body.author1 || "");
+  const authorTwo = String(req.body.author2 || "");
+  const authorThre = String(req.body.author3 || "");
   const descriptiopn = String(req.body.description || "");
 
-  return { title, admin, year, coverUrl, authorOne, descriptiopn };
+  return {
+    title,
+    admin,
+    year,
+    coverUrl,
+    isbn,
+    pagesNumber,
+    authorOne,
+    authorTwo,
+    authorThre,
+    descriptiopn,
+  };
 }
 
-async function addBookToDB(values: (string | number | null)[], author: string) {
-  const addBook = `
-    INSERT INTO books (create_time, name, description, year, cover_url) 
-    VALUES (NOW(), ?, ?, ?, ?);
-    `;
-  const [result] = await pool.execute<mysql.ResultSetHeader>(addBook, values);
-  if (result.affectedRows === 0) {
-    // console.log(`Книгу не додано!`);
-    return false;
-  }
-  const bookId = result.insertId;
+async function addAuthors(authors: string[]) {
   const findAuthor = `
     SELECT authors.name AS authorName, authors.id AS authorId
     FROM authors
     WHERE authors.name=?
     `;
-  const [newAuthor] = await pool.query<RowDataPacket[]>(findAuthor, [author]);
-  let authorId = newAuthor[0]?.authorId;
-  if (!authorId) {
-    const addAuthor = `
-      INSERT INTO authors (create_time, name)
-      VALUES (NOW(), ?)
-      `;
-    const [authorResult] = await pool.execute<mysql.ResultSetHeader>(
-      addAuthor,
-      [author],
-    );
-    authorId = authorResult.insertId;
+
+  const addAuthor = `
+            INSERT INTO authors (create_time, name)
+            VALUES (NOW(), ?)
+            `;
+  if (authors.length < 1) {
+    return null;
   }
+  const authorIds = await Promise.all(
+    authors.map(async (author) => {
+      const [rows] = await pool.query<RowDataPacket[]>(findAuthor, [author]);
+      if (rows.length > 0) {
+        return Number(rows[0]?.authorId);
+      }
+
+      const [result] = await pool.execute<mysql.ResultSetHeader>(addAuthor, [
+        author,
+      ]);
+      return result.insertId;
+    }),
+  );
+  return authorIds;
+}
+
+async function addAuthorsToBook(bookId: number, authorsIds: number[]) {
   const bookAuthor = `
       INSERT INTO book_authors (book_id, author_id) 
       VALUES (?,?)
     `;
-  const [bookAuthorResponse] = await pool.execute<mysql.ResultSetHeader>(
-    bookAuthor,
-    [bookId, authorId],
+  await Promise.all(
+    authorsIds.map(async (authorId) => {
+      pool.execute<mysql.ResultSetHeader>(bookAuthor, [bookId, authorId]);
+    }),
   );
-  return bookAuthorResponse.affectedRows !== 0;
+}
+
+async function addBookToDB(
+  values: (string | number | null)[],
+  authors: string[],
+) {
+  const addBook = `
+    INSERT INTO books (create_time, name, description, year, isbn, n_pages, cover_url) 
+    VALUES (NOW(), ?, ?, ?, ?, ?, ?);
+    `;
+  const [result] = await pool.execute<mysql.ResultSetHeader>(addBook, values);
+  if (result.affectedRows === 0) {
+    return false;
+  }
+  const bookId = result.insertId;
+  const authorIds = await addAuthors(authors);
+  if (!authorIds) return false;
+  await addAuthorsToBook(bookId, authorIds);
+
+  return true;
 }
 
 app.post("/add", upload.single("cover"), async (req, res) => {
-  const { title, admin, year, coverUrl, authorOne, descriptiopn } =
-    getAdminParams(req);
+  const {
+    title,
+    admin,
+    year,
+    coverUrl,
+    isbn,
+    pagesNumber,
+    authorOne,
+    authorTwo,
+    authorThre,
+    descriptiopn,
+  } = getAdminParams(req);
 
-  // if (!admin) {
-  //   res.status(403).send("Не авторизовано");
-  //   return;
-  // }
+  if (!admin) {
+    res.status(403).send("Не авторизовано");
+    return;
+  }
 
   if (!title || !authorOne) {
     res.status(400).send("Нема назви книги чи автора");
@@ -459,10 +522,15 @@ app.post("/add", upload.single("cover"), async (req, res) => {
     title,
     descriptiopn,
     year,
+    isbn,
+    pagesNumber,
     coverUrl,
   ];
   try {
-    const isBookAdded = await addBookToDB(values, authorOne);
+    const authors = [authorOne, authorTwo, authorThre]
+      .map((author) => author.trim())
+      .filter((aurhor) => aurhor.length > 0);
+    const isBookAdded = await addBookToDB(values, authors);
     if (!isBookAdded) {
       res.status(400).send("Не вдалось додати книгу до БД");
       return;
@@ -483,6 +551,16 @@ app.post("/upload/image", upload.single("cover"), async (req, res) => {
 });
 
 function renderBook(book: RowDataPacket[]): string {
+  const authors: string[] = (book[0]?.authorName ?? "")
+    .split("||")
+    .map((author: string) => author.trim())
+    .filter((author: string) => author.length > 0);
+  const authorsHTML = authors
+    .map(
+      (author) =>
+        `<a href="http://localhost:${PORT}/?author=${encodeURIComponent(author)}"><span id="author">${escapeHtml(author)}</span></a>`,
+    )
+    .join(", ");
   return `<div id="id" book-id="__ID__">
             <div id="bookImg" class="col-xs-12 col-sm-3 col-md-3 item"><img src="__COVER__"
               alt="Responsive image" class="img-responsive">
@@ -494,7 +572,7 @@ function renderBook(book: RowDataPacket[]): string {
               </div>
               <div class="col-xs-12 col-sm-12 col-md-12 col-lg-12">
                 <div class="bookLastInfo">
-                  <div class="bookRow"><span class="properties">автор:</span><a href="http://localhost:${PORT}/?author=__AUTHOR__"><span id="author">__AUTHOR__</span></a></div>
+                  <div class="bookRow"><span class="properties">автор:</span>${authorsHTML}</div>
                   <div class="bookRow"><span class="properties">год:</span><a href="http://localhost:${PORT}/?year=__YEAR__"><span id="year">__YEAR__</span></a></div>
                   <div class="bookRow"><span class="properties">страниц:</span><span id="pages">__PAGES__</span></div>
                   <div class="bookRow"><span class="properties">isbn:</span><span id="isbn">__ISBN__</span></div>
@@ -516,7 +594,6 @@ function renderBook(book: RowDataPacket[]): string {
             </div>
           </div>`
     .replace(/__ID__/g, String(book[0]?.bookId))
-    .replace(/__AUTHOR__/g, escapeHtml(book[0]?.authorName))
     .replace(/__TITLE__/g, escapeHtml(book[0]?.bookName))
     .replace(/__YEAR__/g, String(book[0]?.bookYear))
     .replace(/__PAGES__/g, String(book[0]?.bookPages))

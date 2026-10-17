@@ -23,9 +23,13 @@
                 <div class="col-12 col-sm-7 col-md-8 order-3 order-sm-2">
                     <form method="GET" action="/">
                         <input id="search" name="search" type="text" class="form-control" placeholder="Знайти книгу">
+                        <input type="hidden" name="admin" value="1">
                     </form>
                 </div>
                 <div class="col-7 col-sm-3 col-md-2 order-2 order-sm-3 text-end">
+                    <span class="btn btn-dark logout" id="logout" style="background: rgb(220, 220, 220); color: #000">
+                        Вихід
+                    </span>
                     <a href="https://www.facebook.com/shpp.kr/" target="_blank" class="text-success me-2"><i
                             class="fa fa-facebook fa-lg"></i></a>
                     <a href="http://programming.kr.ua/ru/courses#faq" target="_blank" class="text-success"><i
@@ -75,7 +79,7 @@
                 </div>
                 <aside class="col-lg-5">
                     <!--ADD_FORM-->
-                    <form id="addBookForm" enctype="multipart/form-data" method="POST" action="/add/">
+                    <form id="addBookForm" enctype="multipart/form-data" method="POST" action="/add/?admin=1">
                         <fieldset class="add-book-box">
                             <legend>додати нову книгу</legend>
 
@@ -86,6 +90,9 @@
                                         required>
                                     <input class="form-control mb-3" type="number" name="year"
                                         placeholder="рік видання">
+                                    <input class="form-control mb-3" type="number" name="n_pages"
+                                        placeholder="кількість сторінок">
+                                    <input class="form-control mb-3" type="text" name="isbn" placeholder="ISBN">
                                     <input class="form-control mb-3" type="file" name="cover" id="coverInput"
                                         accept="image/*">
                                     <input type="hidden" id="coverPathInput" name="cover_url"
@@ -97,6 +104,7 @@
                                     <input class="form-control mb-3" type="text" name="author1" placeholder="автор 1">
                                     <input class="form-control mb-3" type="text" name="author2" placeholder="автор 2">
                                     <input class="form-control mb-3" type="text" name="author3" placeholder="автор 3">
+                                    <!-- <input type="hidden" name="admin" value="1"> -->
                                     <textarea class="form-control" name="description" rows="5"
                                         placeholder="опис книги"></textarea>
                                 </div>
