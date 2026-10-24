@@ -1,4 +1,8 @@
-import express from "express";
+import express, {
+  type NextFunction,
+  type Request,
+  type Response,
+} from "express";
 import mysql, {
   type RowDataPacket,
   type ResultSetHeader,
@@ -9,6 +13,14 @@ import path from "path";
 import multer from "multer";
 dotenv.config();
 
+class HttpError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 interface IDBResponse {
   rows: RowDataPacket[];
   totalFindedItems: number;
@@ -20,7 +32,12 @@ type ListParams = {
   queryFilter: QueryFilter;
 };
 
-const queryFilterKeys = ["search", "author", "year"] as const;
+const filterKeys = ["search", "author", "year"] as const;
+const sortKeys = ["sort", "order"] as const;
+
+const queryFilterKeys = [...filterKeys, ...sortKeys] as const;
+
+type FilterKey = (typeof filterKeys)[number];
 
 type QueryFilterKey = (typeof queryFilterKeys)[number];
 
@@ -66,13 +83,6 @@ async function getDataFromDB(
   isAdmin = false,
 ): Promise<IDBResponse> {
   const filterParams = [];
-  // const select = `
-  // SELECT
-  // books.id AS bookId,
-  // books.name AS bookName,
-  // books.cover_url AS bookCover,
-  // authors.name AS authorName
-  // `;
   const select = `
    SELECT 
    books.id AS bookId, 
@@ -94,7 +104,7 @@ async function getDataFromDB(
     WHERE author.name LIKE ?
   )`;
   const whereSelector: Record<
-    QueryFilterKey,
+    FilterKey,
     { where: string; searchParams: string[] }
   > = {
     search: {
@@ -110,46 +120,60 @@ async function getDataFromDB(
       searchParams: [`%${queryFilter.year!}%`],
     },
   };
-
-  const activeQuerry = Object.keys(queryFilter)[0] as
-    keyof QueryFilter | undefined;
-  if (activeQuerry && whereSelector[activeQuerry]) {
-    where = whereSelector[activeQuerry].where;
-    filterParams.push(...whereSelector[activeQuerry].searchParams);
+  const sortColumns: Record<string, string> = {
+    bookName: "books.name",
+    bookYear: "books.year",
+    bookClicks: "books.clicks_count",
+  };
+  const sortColumn = queryFilter.sort
+    ? sortColumns[queryFilter.sort]
+    : undefined;
+  const sortOrder = queryFilter.order === "DESC" ? "DESC" : "ASC";
+  const orderBy = sortColumn ? ` ORDER BY ${sortColumn} ${sortOrder} ` : "";
+  // const activeQuerry = Object.keys(queryFilter)[0] as
+  //   keyof QueryFilter | undefined;
+  // if (activeQuerry && whereSelector[activeQuerry]) {
+  //   where = whereSelector[activeQuerry].where;
+  //   filterParams.push(...whereSelector[activeQuerry].searchParams);
+  // }
+  const activeFilter = filterKeys.find((key) => queryFilter[key] !== undefined);
+  if (activeFilter) {
+    where = whereSelector[activeFilter].where;
+    filterParams.push(...whereSelector[activeFilter].searchParams);
   }
   const groupBy = ` GROUP BY books.id `;
   const limitOffset = ` LIMIT ? OFFSET ? `;
-  const selectSql = `${isAdmin ? select + adminSelect : select} ${fromJoins} ${where} ${groupBy} ${limitOffset};`;
+  const selectSql = `${isAdmin ? select + adminSelect : select} ${fromJoins} ${where} ${groupBy} ${orderBy} ${limitOffset};`;
   const countSql = `${selectCount} ${fromJoins} ${where};`;
 
-  try {
-    const [rows] = await pool.query<RowDataPacket[]>(selectSql, [
-      ...filterParams,
-      limit,
-      offset,
-    ]);
-    const [countRows] = await pool.query<RowDataPacket[]>(
-      countSql,
-      filterParams,
-    );
-    const total = countRows[0]?.total ?? 0;
-    return { rows, totalFindedItems: total };
-  } catch (error) {
-    console.error("Помилка підключення до БД:", error);
-    throw error;
-  }
+  const [rows] = await pool.query<RowDataPacket[]>(selectSql, [
+    ...filterParams,
+    limit,
+    offset,
+  ]);
+  const [countRows] = await pool.query<RowDataPacket[]>(countSql, filterParams);
+  const total = countRows[0]?.total ?? 0;
+  return { rows, totalFindedItems: total };
 }
 
 function renderAdminBookPanel(
-  id: number,
-  title: string,
-  author: string,
-  cover: string,
-  year: number,
-  isbn: number,
-  views: number,
-  clicks: number,
+  book: RowDataPacket,
+  queryFilter: QueryFilter,
 ): string {
+  const queryStr = sortKeys
+    .filter((key) => queryFilter[key])
+    .map((key) => `&${key}=${encodeURIComponent(queryFilter[key]!)}`)
+    .join("");
+  const authorStr: string[] = (book.authorName ?? "")
+    .split(", ")
+    .map((author: string) => author.trim())
+    .filter((author: string) => author.length > 0);
+  const authorsHTML = authorStr
+    .map(
+      (author) =>
+        `<a href="http://localhost:${PORT}/?admin=1&login=admin&password=admin&author=${encodeURIComponent(author)}__QUERY__"><span id="author">${escapeHtml(author)}</span></a>`,
+    )
+    .join(", ");
   const html = `<tr>
                   <td>
                     <div class="book-title-cell">
@@ -159,10 +183,10 @@ function renderAdminBookPanel(
                   </td>
                   <td>
                     <ul class="list-unstyled mb-0">
-                      <li>__AUTHOR__</li>
+                      <li>${authorsHTML}</li>
                     </ul>
                   </td>
-                  <td>__YEAR__</td>
+                  <td><a href="http://localhost:${PORT}/?admin=1&login=admin&password=admin&year=__YEAR____QUERY__"><span>__YEAR__</span></a></td>
                   <td>
                     <form id="delBookForm" method="POST" action="/del/">
                       <input type="hidden" name="book_id" value="__ID__">
@@ -173,19 +197,24 @@ function renderAdminBookPanel(
                 </tr>`;
   return (
     html
-      .replace(/__ID__/g, String(id))
-      .replace(/__AUTHOR__/g, escapeHtml(author))
-      .replace(/__TITLE__/g, escapeHtml(title))
-      .replace(/__COVER__/g, escapeHtml(cover))
+      .replace(/__ID__/g, String(book.bookId))
+      // .replace(/__AUTHOR__/g, escapeHtml(author))
+      .replace(/__TITLE__/g, escapeHtml(book.bookName))
+      .replace(/__COVER__/g, escapeHtml(book.bookCover))
       // .replace(/__ISBN__/g, String(isbn))
-      .replace(/__YEAR__/g, String(year))
-      .replace(/__CLICKS__/g, String(clicks))
+      .replace(/__YEAR__/g, String(book.bookYear))
+      .replace(/__CLICKS__/g, String(book.bookClicks))
+      .replace(/__QUERY__/g, queryStr)
   );
+}
+
+function isAdmin(req: express.Request) {
+  return req.query["admin"] === "1";
 }
 
 function parseListParams(req: express.Request): ListParams | null {
   const offset = Number(req.query["offset"]) || 0;
-  const limit = Number(req.query["limit"]) || 10;
+  const limit = Number(req.query["limit"]) || 5;
   if (
     !Number.isInteger(offset) ||
     offset < 0 ||
@@ -194,85 +223,69 @@ function parseListParams(req: express.Request): ListParams | null {
   ) {
     return null;
   }
-  const queryName = queryFilterKeys.find((key) => req.query[key] !== undefined);
-  const query = queryName ? (req.query[queryName] as string) : undefined;
-  const queryFilter = queryName ? { [queryName]: query } : {};
+  // const queryName = queryFilterKeys.find((key) => req.query[key] !== undefined);
+  // const query = queryName ? (req.query[queryName] as string) : undefined;
+  const queryFilter: QueryFilter = {};
+  for (const key of queryFilterKeys) {
+    const value = req.query[key];
+    if (typeof value === "string" && value !== "") {
+      queryFilter[key] = value;
+    }
+  }
+  // const admin = isAdmin(req);
+  // if (admin) {
+  //   const sort = (req.query["sort"] as string) || "";
+  //   const order = (req.query["order"] as string) || "";
+  //   return { offset, limit, queryFilter };
+  // }
   return { offset, limit, queryFilter };
 }
 
 async function buildUserPage({ offset, limit, queryFilter }: ListParams) {
-  try {
-    const { rows, totalFindedItems } = await getDataFromDB(
-      offset,
-      limit,
-      queryFilter,
-    );
-    const booksHtml = rows
-      .map((row) =>
-        renderBookPanel(
-          row.bookId,
-          row.bookName,
-          row.authorName,
-          row.bookCover,
-        ),
-      )
-      .join("\n");
-    const paginationHtml = renderPagination(
-      offset,
-      limit,
-      totalFindedItems,
-      queryFilter,
-    );
-    const template = await fs.readFile(BOOKS_TEMPLATE_PATH, "utf-8");
-    return template
-      .replace("<!--BOOKS-->", booksHtml)
-      .replace("<!--PAGINATION-->", paginationHtml);
-  } catch (error) {
-    throw error;
-  }
+  const { rows, totalFindedItems } = await getDataFromDB(
+    offset,
+    limit,
+    queryFilter,
+  );
+  const booksHtml = rows
+    .map((row) =>
+      renderBookPanel(row.bookId, row.bookName, row.authorName, row.bookCover),
+    )
+    .join("\n");
+  const paginationHtml = renderPagination(
+    offset,
+    limit,
+    totalFindedItems,
+    queryFilter,
+  );
+  const template = await fs.readFile(BOOKS_TEMPLATE_PATH, "utf-8");
+  return template
+    .replace("<!--BOOKS-->", booksHtml)
+    .replace("<!--PAGINATION-->", paginationHtml);
 }
 
 async function buildAdminPage({ offset, limit, queryFilter }: ListParams) {
-  try {
-    const { rows, totalFindedItems } = await getDataFromDB(
-      offset,
-      limit,
-      queryFilter,
-      true,
-    );
-    const booksBlock = rows
-      .map((row) =>
-        renderAdminBookPanel(
-          row.bookId,
-          row.bookName,
-          row.authorName,
-          row.bookCover,
-          row.bookYear,
-          row.bookIsbn,
-          row.bookViews,
-          row.bookClicks,
-        ),
-      )
-      .join("\n");
-    const paginationHtml = renderAdminPagination(
-      offset,
-      limit,
-      totalFindedItems,
-      queryFilter,
-    );
-    // const addForm = renderAddBookForm();
-    const template = await fs.readFile(ADMIN_TEMPLATE_PATH, "utf-8");
-    return template
-      .replace("<!--BOOKS-->", booksBlock)
-      .replace("<!--PAGINATION-->", paginationHtml);
-    // .replace("<!--ADD_FORM-->", addForm);
-  } catch (error) {
-    throw error;
-  }
-}
-
-function isAdmin(req: express.Request) {
-  return req.query["admin"] === "1";
+  const { rows, totalFindedItems } = await getDataFromDB(
+    offset,
+    limit,
+    queryFilter,
+    true,
+  );
+  const booksBlock = rows
+    .map((row) => renderAdminBookPanel(row, queryFilter))
+    .join("\n");
+  const paginationHtml = renderAdminPagination(
+    offset,
+    limit,
+    totalFindedItems,
+    queryFilter,
+  );
+  // const addForm = renderAddBookForm();
+  const template = await fs.readFile(ADMIN_TEMPLATE_PATH, "utf-8");
+  return template
+    .replace("<!--BOOKS-->", booksBlock)
+    .replace("<!--PAGINATION-->", paginationHtml);
+  // .replace("<!--ADD_FORM-->", addForm);
 }
 
 async function updateBookCounts(
@@ -282,25 +295,20 @@ async function updateBookCounts(
   const update = ` UPDATE books `;
   const setCount = ` SET ${counter} = ${counter} + 1 `;
   const where = ` WHERE id = ? `;
-  try {
-    const [updateResult] = await pool.query<ResultSetHeader>(
-      `
+  const [updateResult] = await pool.query<ResultSetHeader>(
+    `
       ${update}
       ${setCount}
       ${where}
       `,
-      [id],
-    );
-    return updateResult.affectedRows !== 0;
-  } catch (error) {
-    throw error;
-  }
+    [id],
+  );
+  return updateResult.affectedRows !== 0;
 }
 
 async function getBookData(id: number): Promise<RowDataPacket[]> {
-  try {
-    const [bookData] = await pool.query<RowDataPacket[]>(
-      `SELECT 
+  const [bookData] = await pool.query<RowDataPacket[]>(
+    `SELECT 
       books.id AS bookId, 
       books.name AS bookName, 
       books.description AS bookDescription,
@@ -315,12 +323,9 @@ async function getBookData(id: number): Promise<RowDataPacket[]> {
       INNER JOIN book_authors ON books.id=book_authors.book_id
       INNER JOIN authors ON book_authors.author_id=authors.id
       WHERE books.id=?`,
-      [id],
-    );
-    return bookData;
-  } catch (error) {
-    throw error;
-  }
+    [id],
+  );
+  return bookData;
 }
 
 async function softDeleteBook(id: number): Promise<boolean> {
@@ -333,78 +338,52 @@ async function softDeleteBook(id: number): Promise<boolean> {
 
 app.post("/del/", async (req, res) => {
   const id = Number(req.body.book_id);
-  if (!Number.isInteger(id) || id <= 0) {
-    return res.status(400).send("Невірний ідентифікатор книги");
-  }
+  if (!Number.isInteger(id) || id <= 0)
+    throw new HttpError(400, "Невірний ідентифікатор книги");
 
-  try {
-    const isBookDeleted = await softDeleteBook(id);
-    if (!isBookDeleted) {
-      res.status(400).send("Не вдалось видалити книгу з БД");
-      return;
-    }
-    res.redirect("/?admin=1");
-  } catch (error) {
-    console.error("Помилка підключення до БД:", error);
-    res.status(500).send("Помилка підключення до бази даних");
-  }
+  const isBookDeleted = await softDeleteBook(id);
+  if (!isBookDeleted)
+    throw new HttpError(400, "Не вдалось видалити книгу з БД");
+
+  res.redirect("/?admin=1");
 });
 app.get("/book/:id", async (req, res) => {
   const id = Number(req.params.id);
-  if (!Number.isInteger(id) || id <= 0) {
-    return res.status(400).send("Невірний ідентифікатор книги");
-  }
+  if (!Number.isInteger(id) || id <= 0)
+    throw new HttpError(400, "Невірний ідентифікатор книги");
 
-  try {
-    const isCountUpdated = await updateBookCounts("views_count", id);
+  const isCountUpdated = await updateBookCounts("views_count", id);
 
-    if (!isCountUpdated) {
-      return res.status(404).send("Книгу не знайдено");
-    }
-    const bookData = await getBookData(id);
-    if (bookData.length === 0) {
-      return res.status(404).send("Книгу не знайдено");
-    }
-    const bookHtml = renderBook(bookData);
-    const template = await fs.readFile(BOOK_PAGE_TEMPLATE_PATH, "utf-8");
-    const html = template.replace("<!--BOOK-->", bookHtml);
-    res.type("html").send(html);
-  } catch (error) {
-    console.error("Помилка підключення до БД:", error);
-    res.status(500).send("Помилка підключення до бази даних");
-  }
+  if (!isCountUpdated) throw new HttpError(404, "Книгу не знайдено");
+
+  const bookData = await getBookData(id);
+  if (bookData.length === 0) throw new HttpError(404, "Книгу не знайдено");
+
+  const bookHtml = renderBook(bookData);
+  const template = await fs.readFile(BOOK_PAGE_TEMPLATE_PATH, "utf-8");
+  const html = template.replace("<!--BOOK-->", bookHtml);
+  res.type("html").send(html);
 });
 
 app.post("/book/", async (req, res) => {
   const bookId = Number(req.body.bookId);
-  if (!Number.isInteger(bookId) || bookId <= 0) {
-    return res.status(400).send("Невірний ідентифікатор книги");
-  }
-  try {
-    const isCountUpdated = await updateBookCounts("clicks_count", bookId);
-    if (!isCountUpdated) {
-      return res.status(404).send("Книгу не знайдено");
-    }
-    res.status(200).send({ ok: "OK" });
-  } catch (error) {
-    res.status(500).send("Помилка підключення до бази даних");
-  }
+  if (!Number.isInteger(bookId) || bookId <= 0)
+    throw new HttpError(400, "Невірний ідентифікатор книги");
+
+  const isCountUpdated = await updateBookCounts("clicks_count", bookId);
+  if (!isCountUpdated) throw new HttpError(404, "Книгу не знайдено");
+
+  res.status(200).send({ ok: "OK" });
 });
 
 app.get("/", async (req, res) => {
   const params = parseListParams(req);
-  if (!params) {
-    return res.status(400).send("Невірний формат query параметрів");
-  }
+  if (!params) throw new HttpError(400, "Невірний формат query параметрів");
 
-  try {
-    const html = isAdmin(req)
-      ? await buildAdminPage(params)
-      : await buildUserPage(params);
-    res.type("html").send(html);
-  } catch (error) {
-    res.status(500).send("Помилка підключення до бази даних");
-  }
+  const html = isAdmin(req)
+    ? await buildAdminPage(params)
+    : await buildUserPage(params);
+  res.type("html").send(html);
 });
 
 function getAdminParams(req: express.Request) {
@@ -469,9 +448,7 @@ async function addAuthorsToBook(bookId: number, authorsIds: number[]) {
       VALUES (?,?)
     `;
   await Promise.all(
-    authorsIds.map(async (authorId) => {
-      pool.execute<mysql.ResultSetHeader>(bookAuthor, [bookId, authorId]);
-    }),
+    authorsIds.map((authorId) => pool.execute(bookAuthor, [bookId, authorId])),
   );
 }
 
@@ -509,15 +486,11 @@ app.post("/add", upload.single("cover"), async (req, res) => {
     descriptiopn,
   } = getAdminParams(req);
 
-  if (!admin) {
-    res.status(403).send("Не авторизовано");
-    return;
-  }
+  if (!admin) throw new HttpError(403, "Не авторизовано");
 
-  if (!title || !authorOne) {
-    res.status(400).send("Нема назви книги чи автора");
-    return;
-  }
+  if (!title || !authorOne)
+    throw new HttpError(400, "Нема назви книги чи автора");
+
   const values: (string | number | null)[] = [
     title,
     descriptiopn,
@@ -526,25 +499,19 @@ app.post("/add", upload.single("cover"), async (req, res) => {
     pagesNumber,
     coverUrl,
   ];
-  try {
-    const authors = [authorOne, authorTwo, authorThre]
-      .map((author) => author.trim())
-      .filter((aurhor) => aurhor.length > 0);
-    const isBookAdded = await addBookToDB(values, authors);
-    if (!isBookAdded) {
-      res.status(400).send("Не вдалось додати книгу до БД");
-      return;
-    }
-    res.redirect("/?admin=1");
-  } catch (error) {
-    res.status(500).send("Помилка підключення до бази даних");
-  }
+
+  const authors = [authorOne, authorTwo, authorThre]
+    .map((author) => author.trim())
+    .filter((aurhor) => aurhor.length > 0);
+  const isBookAdded = await addBookToDB(values, authors);
+  if (!isBookAdded) throw new HttpError(400, "Не вдалось додати книгу до БД");
+
+  res.redirect("/?admin=1");
 });
 
 app.post("/upload/image", upload.single("cover"), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: "Файл не знайдено" });
-  }
+  if (!req.file) throw new HttpError(400, "Файл не знайдено");
+
   const filePath = `/book-covers/${req.file.filename}`;
 
   res.json({ success: true, filePath: filePath });
@@ -764,6 +731,35 @@ function renderPagination(
       </form>
     </div>`;
 }
+
+app.use((req, res) => {
+  res.status(404).send("Сторінку не знайдено");
+});
+
+app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
+  if (res.headersSent) return next(err);
+
+  if (err instanceof HttpError) {
+    return res.status(err.status).send(err.message);
+  }
+  if (err instanceof multer.MulterError) {
+    return res.status(400).send(`Помилка завантаження файлу: ${err.message}`);
+  }
+  // помилки body-parser (кривий JSON тощо) мають status 4xx
+  if (
+    typeof err === "object" &&
+    err !== null &&
+    "status" in err &&
+    typeof err.status === "number" &&
+    err.status >= 400 &&
+    err.status < 500
+  ) {
+    return res.status(err.status).send("Невірний запит");
+  }
+
+  console.error(`[${req.method} ${req.originalUrl}]`, err);
+  res.status(500).send("Внутрішня помилка сервера");
+});
 
 app.listen(PORT, () => {
   console.log(`Сервер успішно запущено на http://localhost:${PORT}`);
