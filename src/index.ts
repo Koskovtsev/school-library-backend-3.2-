@@ -47,7 +47,7 @@ type QueryFilterKey = (typeof queryFilterKeys)[number];
 type QueryFilter = Partial<Record<QueryFilterKey, string>>;
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5000;
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
